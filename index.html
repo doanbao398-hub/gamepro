@@ -1,0 +1,587 @@
+<!doctype html>
+<html lang="vi">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Boss Battle - Kiếm Khí Hủy Diệt</title>
+    <link rel="icon" href="data:," />
+    <style>
+      body {
+        margin: 0;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        height: 100vh;
+        background: #1a1a1a;
+        font-family: sans-serif;
+        overflow: hidden;
+      }
+      canvas {
+        background: #333;
+        border: 4px solid #555;
+        box-shadow: 0 0 30px rgba(0, 0, 0, 0.7);
+      }
+      .ui {
+        position: absolute;
+        top: 15px;
+        color: white;
+        text-align: center;
+        pointer-events: none;
+        font-size: 18px;
+        line-height: 1.5;
+        text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.8);
+      }
+      .hotkey {
+        color: #ffcc00;
+        font-weight: bold;
+      }
+      video {
+        display: none;
+      }
+    </style>
+  </head>
+  <button
+    id="btnRetry"
+    onclick="resetGame()"
+    style="
+      display: none;
+      position: absolute;
+      top: 60%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      padding: 15px 30px;
+      font-size: 24px;
+      cursor: pointer;
+      background: #ffcc00;
+      border: none;
+      border-radius: 5px;
+      font-weight: bold;
+      z-index: 100;
+    "
+  >
+    CHƠI LẠI
+  </button>
+  <body>
+    <div class="ui">
+      A D: Di chuyển | Click: Chém |
+      <span class="hotkey">Shift: Đỡ (Parry Kiếm Khí tạo Giáp ảo)</span> |
+      <span class="hotkey">F: Hóa Thần (Cần 5 nội tại)</span> |
+      <span class="hotkey">Q: Kiếm Khí</span>
+    </div>
+    <canvas id="gameCanvas" width="1600" height="800"></canvas>
+    <video id="vIdle" src="b.mp4" loop muted playsinline></video>
+    <video id="vWalk" src="k.mp4" loop muted playsinline></video>
+    <video id="vBossSkill" src="bossc.mp4" muted playsinline></video>
+
+    <script>
+      const canvas = document.getElementById("gameCanvas");
+      const ctx = canvas.getContext("2d");
+      const vIdle = document.getElementById("vIdle");
+      const vWalk = document.getElementById("vWalk");
+      const vBossSkill = document.getElementById("vBossSkill");
+      const offscreenCanvas = document.createElement("canvas");
+      const offCtx = offscreenCanvas.getContext("2d", {
+        willReadFrequently: true,
+      });
+      offscreenCanvas.width = 180;
+      offscreenCanvas.height = 180;
+      const bossOffscreenCanvas = document.createElement("canvas");
+      const bossOffCtx = bossOffscreenCanvas.getContext("2d", {
+        willReadFrequently: true,
+      });
+      bossOffscreenCanvas.width = 225;
+      bossOffscreenCanvas.height = 225;
+      const projectiles = [];
+      const bossProjectiles = [];
+    </script>
+
+    <script src="du_lieu.js"></script>
+    <script src="cong_cu.js"></script>
+    <script src="nhan_vat.js"></script>
+    <script src="ke_thu.js"></script>
+    <script src="dieu_khien.js"></script>
+
+    <script>
+      function update() {
+        // 1. LOGIC DUY TRÌ DẠNG THẦN (Sử dụng thanh Mana Xanh - Stamina)
+        if (player.isAwakened) {
+          let now = Date.now();
+
+          // Cứ mỗi 5000ms (5 giây) thì trừ 1 cục nội năng
+          if (now - player.lastEnergyDrop >= 2500) {
+            player.innerEnergy -= 1;
+            player.lastEnergyDrop = now; // Reset mốc thời gian
+          }
+
+          // Nếu hết nội năng thì tắt trạng thái Hóa Thần
+          if (player.innerEnergy <= 0) {
+            player.innerEnergy = 0;
+            player.isAwakened = false;
+            vIdle.pause();
+            vWalk.pause();
+          }
+        }
+        // 2. KIỂM TRA TRẠNG THÁI GAME (Dừng update nếu có bên chết)
+        if (player.hp <= 0 || boss.hp <= 0) return;
+
+        // 3. HỒI PHỤC THÔNG SỐ (Chỉ hồi Stamina khi KHÔNG ở dạng Thần)
+        if (player.stamina < player.maxStamina) {
+          player.stamina += player.staminaRegen;
+        }
+
+        // Hồi máu nhẹ khi ở dạng Thần
+        if (player.isAwakened && player.hp < 100) player.hp += 0.01;
+
+        // 4. HỒI MÁU XÁM (Grey HP) CHO BOSS VÀ PLAYER
+        if (boss.greyHp > 0 && Date.now() - boss.lastHitTime > 1200) {
+          let hr = 0.4;
+          boss.greyHp -= hr;
+          boss.hp += hr;
+          if (boss.greyHp < 0) boss.greyHp = 0;
+        }
+        if (
+          player.greyHp > 0 &&
+          player.lastGreyHpTime > 0 &&
+          Date.now() - player.lastGreyHpTime > 2000
+        ) {
+          let hr = 0.2;
+          player.greyHp -= hr;
+          player.hp += hr;
+          if (player.hp > 100) player.hp = 100;
+        }
+
+        // 5. DI CHUYỂN NHÂN VẬT
+        if (
+          !player.isAtk &&
+          !player.isParrying &&
+          !player.isCountering &&
+          !player.isCastingQ &&
+          !player.isPreparingJump &&
+          !player.isFrozen
+        ) {
+          if (keys["KeyD"]) {
+            player.x += player.speed;
+            player.dir = "right";
+            player.isMoving = true;
+          } else if (keys["KeyA"]) {
+            player.x -= player.speed;
+            player.dir = "left";
+            player.isMoving = true;
+          } else player.isMoving = false;
+        }
+
+        // TRỌNG LỰC
+        if (!player.isFrozen && !player.isPreparingJump) {
+          player.vy += player.gravity;
+          player.y += player.vy;
+        }
+        if (player.y >= player.groundY) {
+          player.y = player.groundY;
+          player.vy = 0;
+          player.isJumping = false;
+          player.isAirAtk = false;
+        }
+
+        // VA CHẠM THÂN THỂ (Body Collision)
+        const bBody = { x: boss.x + 50, y: boss.y, w: 100, h: boss.h };
+        const pBody = { x: player.x + 40, y: player.y, w: 60, h: player.h };
+        if (checkRectCollision(pBody, bBody)) {
+          if (pBody.x < bBody.x) player.x = bBody.x - 40 - pBody.w;
+          else player.x = bBody.x + bBody.w - 40;
+        }
+
+        // 6. AI CỦA BOSS
+        if (!(boss.hp <= 0 || boss.isStunned || boss.state === "skill")) {
+          let dist = player.x + player.w / 2 - (boss.x + boss.w / 2);
+          boss.dir = dist > 0 ? "right" : "left";
+
+          if (
+            !boss.skillCooldown &&
+            !boss.isShielded &&
+            boss.state !== "charge" &&
+            boss.state !== "attack" &&
+            Math.random() < 0.001
+          ) {
+            triggerBossSkill();
+          } else if (!(boss.state === "charge" || boss.state === "attack")) {
+            if (Math.abs(dist) > boss.atkRange) {
+              boss.state = "walk";
+              boss.x += (dist > 0 ? 1 : -1) * boss.speed;
+            } else {
+              if (!boss.cooldown) {
+                boss.state = "charge";
+                boss.hasDealtDamage = false;
+                setTimeout(() => {
+                  if (
+                    boss.hp <= 0 ||
+                    boss.isStunned ||
+                    boss.state === "skill"
+                  ) {
+                    boss.state = "idle";
+                    return;
+                  }
+                  boss.state = "attack";
+                  setTimeout(() => {
+                    if (
+                      boss.hp <= 0 ||
+                      boss.isStunned ||
+                      boss.state === "skill"
+                    ) {
+                      boss.state = "idle";
+                      return;
+                    }
+                    boss.state = "idle";
+                    boss.hasDealtDamage = false;
+                    setTimeout(() => {
+                      if (
+                        boss.hp <= 0 ||
+                        boss.isStunned ||
+                        boss.state === "skill"
+                      ) {
+                        boss.state = "idle";
+                        return;
+                      }
+                      boss.state = "attack";
+                      setTimeout(() => {
+                        boss.state = "idle";
+                        boss.cooldown = true;
+                        setTimeout(() => (boss.cooldown = false), 2500);
+                      }, 200);
+                    }, 500);
+                  }, 200);
+                }, 400);
+              } else boss.state = "idle";
+            }
+          }
+        }
+
+        // 7. XỬ LÝ PROJECTILES (Đạn bay)
+        projectiles.forEach((p, i) => {
+          p.x += p.speed;
+          p.dist += Math.abs(p.speed);
+          p.alpha = 1 - p.dist / p.maxDist;
+          if (checkRectCollision(p, bBody)) {
+            applyDamageToBoss(40 * p.alpha);
+            boss.vx = p.speed * 1.2;
+            projectiles.splice(i, 1);
+          } else if (p.dist >= p.maxDist) projectiles.splice(i, 1);
+        });
+
+        bossProjectiles.forEach((p, i) => {
+          p.x += p.speed;
+          p.dist += Math.abs(p.speed);
+          if (checkRectCollision(p, pBody)) {
+            if (player.isParrying) {
+              let damage = 45;
+              player.hp -= damage;
+              player.greyHp += damage;
+              player.lastGreyHpTime = Date.now();
+              player.vx = p.speed * 0.4;
+            } else {
+              player.hp -= 45;
+              player.vx = p.speed * 0.7;
+            }
+            bossProjectiles.splice(i, 1);
+          } else if (p.dist >= p.maxDist) bossProjectiles.splice(i, 1);
+        });
+
+        // 8. VA CHẠM TẤN CÔNG (Player Attack)
+        if (player.isAtk && player.atkFrame === 1 && !player.hasDealtDamage) {
+          let atkRect = {
+            x: player.dir === "right" ? player.x + 90 : player.x - 90,
+            y: player.y,
+            w: 140,
+            h: player.h,
+          };
+          if (checkRectCollision(atkRect, bBody)) {
+            applyDamageToBoss(
+              player.isAwakened ? 45 : player.atkType === 2 ? 30 : 18,
+            );
+            boss.vx = player.dir === "right" ? 15 : -15;
+            // Vẫn tăng nội năng vàng khi đánh thường nếu chưa hóa thần
+            if (!player.isAwakened && player.innerEnergy < 10)
+              player.innerEnergy++;
+            player.hasDealtDamage = true;
+          }
+        }
+
+        if (player.isAirAtk && !player.hasDealtDamage) {
+          let airAtkRect = {
+            x: player.dir === "right" ? player.x + 80 : player.x - 100,
+            y: player.y + 20,
+            w: 160,
+            h: player.h,
+          };
+          if (checkRectCollision(airAtkRect, bBody)) {
+            applyDamageToBoss(boss.maxHp * (player.isAwakened ? 0.25 : 0.15));
+            player.isFrozen = true;
+            player.vy = 0;
+            boss.isStunned = true;
+            setTimeout(() => {
+              player.isFrozen = false;
+            }, 500);
+            setTimeout(() => {
+              boss.isStunned = false;
+            }, 100);
+            boss.vx = player.dir === "right" ? 10 : -10;
+            if (!player.isAwakened && player.innerEnergy < 10)
+              player.innerEnergy++;
+            player.hasDealtDamage = true;
+          }
+        }
+
+        // 9. BOSS TẤN CÔNG PLAYER
+        if (
+          boss.state === "attack" &&
+          !boss.hasDealtDamage &&
+          !boss.isStunned
+        ) {
+          let bAtkRect = {
+            x: boss.dir === "left" ? boss.x - 90 : boss.x + 90,
+            y: boss.y,
+            w: 160,
+            h: boss.h,
+          };
+          if (checkRectCollision(bAtkRect, pBody)) {
+            if (player.isParrying && player.stamina >= 45) {
+              player.isParrying = false;
+              player.isCountering = true;
+              player.stamina -= 45;
+              applyDamageToBoss(30);
+              boss.vx = boss.dir === "left" ? 40 : -40;
+              setTimeout(() => {
+                player.isCountering = false;
+              }, 400);
+            } else {
+              player.hp -= 25;
+              player.vx = boss.dir === "left" ? -20 : 20;
+            }
+            boss.hasDealtDamage = true;
+          }
+        }
+
+        // 10. MA SÁT VÀ GIỚI HẠN BIÊN
+        player.vx *= 0.8;
+        boss.vx *= 0.8;
+        player.x += player.vx;
+        boss.x += boss.vx;
+
+        if (player.x < 0) player.x = 0;
+        if (player.x > canvas.width - player.w)
+          player.x = canvas.width - player.w;
+        if (boss.x < 0) boss.x = 0;
+        if (boss.x > canvas.width - boss.w) boss.x = canvas.width - boss.w;
+      }
+
+      function drawEntity(type, obj) {
+        let imgKey,
+          flip = false,
+          useVideo = false,
+          videoElement = null;
+        let drawW = obj.w,
+          drawH = obj.h,
+          drawY = obj.y;
+        if (type === "player") {
+          if (
+            obj.isAwakened &&
+            !obj.isAtk &&
+            !obj.isCountering &&
+            !obj.isParrying &&
+            !obj.isCastingQ &&
+            !obj.isJumping &&
+            !obj.isPreparingJump
+          ) {
+            useVideo = true;
+            videoElement = obj.isMoving ? vWalk : vIdle;
+          }
+          if (!useVideo) {
+            if (obj.isPreparingJump)
+              imgKey = obj.isAwakened ? "p_awaken_jump_prep" : "p_jump_prep";
+            else if (obj.isAirAtk)
+              imgKey = obj.isAwakened ? "p_awaken_jump_atk" : "p_jump_atk";
+            else if (obj.isJumping || obj.isFrozen)
+              imgKey = obj.isAwakened ? "p_awaken_jump_air" : "p_jump_air";
+            else if (obj.isCastingQ) imgKey = "p_cast_q";
+            else if (obj.isCountering) imgKey = "p_counter";
+            else if (obj.isParrying)
+              imgKey =
+                obj.parryState === "start" ? "p_parry_start" : "p_parry_main";
+            else if (obj.isAtk)
+              imgKey = obj.isAwakened
+                ? "p_awaken_atk"
+                : obj.atkFrame === 0
+                  ? "p_atk1"
+                  : obj.atkType === 2
+                    ? "p_atk_alt"
+                    : "p_atk2";
+            else if (obj.isMoving) {
+              let f = Math.floor(Date.now() / 150) % 2;
+              imgKey =
+                obj.dir === "right"
+                  ? f === 0
+                    ? "p_walk1"
+                    : "p_walk2"
+                  : f === 0
+                    ? "p_walkL1"
+                    : "p_walkL2";
+            } else imgKey = obj.dir === "right" ? "p_idle" : "p_idleL";
+            if (obj.dir === "left" && !imgKey.includes("L")) flip = true;
+          }
+          if (useVideo) {
+            drawW = 180;
+            drawH = 180;
+            drawY = obj.y - (180 - obj.h);
+          }
+        } else {
+          if (obj.state === "skill") {
+            useVideo = true;
+            videoElement = vBossSkill;
+            drawW = 200;
+            drawH = 250;
+            drawY = obj.y;
+          } else {
+            imgKey =
+              obj.state === "charge"
+                ? "b_charge"
+                : obj.state === "attack"
+                  ? "b_atk"
+                  : obj.state === "walk"
+                    ? "b_walk"
+                    : "b_idle";
+            if (
+              ((obj.state === "walk" || obj.state === "idle") &&
+                obj.dir === "right") ||
+              (obj.dir === "left" &&
+                (obj.state === "charge" || obj.state === "attack"))
+            )
+              flip = true;
+          }
+        }
+        ctx.save();
+        if (obj.isAwakened && type === "player") {
+          ctx.shadowBlur = 25;
+          ctx.shadowColor = "gold";
+        }
+        if (obj.isFrozen && type === "player") {
+          ctx.shadowBlur = 30;
+          ctx.shadowColor = "white";
+        }
+        if (flip || (useVideo && obj.dir === "left")) {
+          ctx.translate(obj.x + drawW, drawY);
+          ctx.scale(-1, 1);
+          if (useVideo) {
+            const vCanvas =
+              type === "player"
+                ? drawVideoTransparent(videoElement)
+                : drawBossVideoTransparent(videoElement);
+            ctx.drawImage(vCanvas, 0, 0, drawW, drawH);
+          } else ctx.drawImage(imgs[imgKey], 0, 0, drawW, drawH);
+        } else {
+          ctx.translate(obj.x, drawY);
+          if (useVideo) {
+            const vCanvas =
+              type === "player"
+                ? drawVideoTransparent(videoElement)
+                : drawBossVideoTransparent(videoElement);
+            ctx.drawImage(vCanvas, 0, 0, drawW, drawH);
+          } else ctx.drawImage(imgs[imgKey], 0, 0, drawW, drawH);
+        }
+        if (type === "boss" && boss.isShielded && boss.state !== "skill") {
+          ctx.globalAlpha = boss.shieldAlpha;
+          ctx.drawImage(imgs.b_armor, -25, -25, drawW + 50, drawH + 50);
+          ctx.globalAlpha = 1;
+        }
+        ctx.restore();
+        ctx.fillStyle = "rgba(0,0,0,0.5)";
+        ctx.fillRect(obj.x, obj.y - 40, obj.w, 10);
+        if (type === "player") {
+          ctx.fillStyle = "#2ecc71";
+          ctx.fillRect(obj.x, obj.y - 40, obj.w * (obj.hp / 100), 10);
+          if (player.greyHp > 0) {
+            ctx.fillStyle = "rgba(200, 200, 200, 0.8)";
+            ctx.fillRect(
+              obj.x + obj.w * (obj.hp / 100),
+              obj.y - 40,
+              obj.w * (player.greyHp / 100),
+              10,
+            );
+          }
+          ctx.fillStyle = "rgba(0,0,0,0.5)";
+          ctx.fillRect(obj.x, obj.y - 25, obj.w, 8);
+          ctx.fillStyle = obj.isAwakened ? "cyan" : "#3498db";
+          ctx.fillRect(
+            obj.x,
+            obj.y - 25,
+            obj.w * (obj.stamina / obj.maxStamina),
+            8,
+          );
+          for (let i = 0; i < 5; i++) {
+            ctx.strokeStyle = "white";
+            ctx.strokeRect(obj.x + i * 28, obj.y - 55, 25, 10);
+            if (i < obj.innerEnergy) {
+              ctx.fillStyle = "#ffcc00";
+              ctx.fillRect(obj.x + i * 28, obj.y - 55, 25, 10);
+            }
+          }
+        } else {
+          ctx.fillStyle = "#888";
+          ctx.fillRect(
+            obj.x,
+            obj.y - 40,
+            obj.w * ((boss.hp + boss.greyHp) / boss.maxHp),
+            10,
+          );
+          ctx.fillStyle = "#e74c3c";
+          ctx.fillRect(obj.x, obj.y - 40, obj.w * (boss.hp / boss.maxHp), 10);
+        }
+      }
+
+      function loop() {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        if (loaded >= Object.keys(sources).length) {
+          ctx.drawImage(imgs.game_map, 0, 0, canvas.width, canvas.height);
+          update();
+          if (player.hp > 0) drawEntity("player", player);
+          if (boss.hp > 0) drawEntity("boss", boss);
+          projectiles.forEach((p) => {
+            ctx.save();
+            ctx.globalAlpha = p.alpha;
+            if (p.dir === "left") {
+              ctx.translate(p.x + p.w, p.y);
+              ctx.scale(-1, 1);
+              ctx.drawImage(imgs.p_projectile, 0, 0, p.w, p.h);
+            } else ctx.drawImage(imgs.p_projectile, p.x, p.y, p.w, p.h);
+            ctx.restore();
+          });
+          bossProjectiles.forEach((p) => {
+            ctx.save();
+            ctx.shadowBlur = 25;
+            ctx.shadowColor = "#ff2200";
+            if (p.dir === "left") {
+              ctx.translate(p.x + p.w, p.y);
+              ctx.scale(-1, 1);
+              ctx.drawImage(imgs.b_skill_atk, 0, 0, p.w, p.h);
+            } else {
+              ctx.drawImage(imgs.b_skill_atk, p.x, p.y, p.w, p.h);
+            }
+            ctx.restore();
+          });
+          if (player.hp <= 0) {
+            ctx.fillStyle = "white";
+            ctx.font = "bold 60px Arial";
+            ctx.textAlign = "center";
+            ctx.fillText("GAME OVER", 800, 400);
+            document.getElementById("btnRetry").style.display = "block";
+          }
+          if (boss.hp <= 0) {
+            ctx.fillStyle = "gold";
+            ctx.font = "bold 60px Arial";
+            ctx.textAlign = "center";
+            ctx.fillText("BOSS DEFEATED!", 800, 400);
+          }
+        }
+        requestAnimationFrame(loop);
+      }
+      loop();
+    </script>
+  </body>
+</html>
