@@ -5,7 +5,7 @@ const boss = {
   h: 250,
   speed: 3.8,
   hp: 1000,
-  maxHp: 1000,
+  maxHp: 5000,
   greyHp: 0,
   dir: "left",
   state: "idle",
